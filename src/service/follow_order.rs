@@ -64,30 +64,42 @@ impl FollowOrder {
 
         let event = Contract::event_of_type::<TradeFilter>(ws_provider.into());
         let mut stream = event.subscribe_with_meta().await.unwrap();
-        while let Some(Ok((log, _))) = stream.next().await {
-            let p = Arc::clone(&provider_with_signer);
-            let c = Arc::clone(&friend_contract);
-            let chain_id = Arc::clone(&chain_id);
-            let subject: H160 = log.subject;
-            let subject = Arc::new(subject);
-            let trader: H160 = log.trader;
-            let trader_str = format!("{trader:#010x}");
-            if target_address_vec.contains(&trader_str.to_lowercase()) && log.is_buy {
-                info!("***** 开始处理跟单 *****");
-                let matching_configs: Vec<&FollowsAddressConfig> = config
-                    .follows_address_config
-                    .iter()
-                    .filter(|f| f.address.to_lowercase() == trader_str.to_string().to_lowercase())
-                    .collect();
+        loop {
+            match stream.next().await {
+                Some(Ok((log, _))) => {
+                    let p = Arc::clone(&provider_with_signer);
+                    let c = Arc::clone(&friend_contract);
+                    let chain_id = Arc::clone(&chain_id);
+                    let subject: H160 = log.subject;
+                    let subject = Arc::new(subject);
+                    let trader: H160 = log.trader;
+                    let trader_str = format!("{trader:#010x}");
+                    if target_address_vec.contains(&trader_str.to_lowercase()) && log.is_buy {
+                        info!("***** 开始处理跟单 *****");
+                        let matching_configs: Vec<&FollowsAddressConfig> = config
+                            .follows_address_config
+                            .iter()
+                            .filter(|f| {
+                                f.address.to_lowercase() == trader_str.to_string().to_lowercase()
+                            })
+                            .collect();
 
-                let follow_info = *matching_configs.get(0).unwrap();
-                let follow_info_arc = Arc::new(follow_info.clone());
-                tokio::spawn(async move {
-                    handle_buy(chain_id, p, c, subject, Arc::clone(&follow_info_arc)).await;
-                });
+                        let follow_info = *matching_configs.get(0).unwrap();
+                        let follow_info_arc = Arc::new(follow_info.clone());
+                        tokio::spawn(async move {
+                            handle_buy(chain_id, p, c, subject, Arc::clone(&follow_info_arc)).await;
+                        });
+                    }
+                }
+                Some(Err(e)) => {
+                    info!("***** log流异常: {} *****", e)
+                }
+                None => {
+                    info!("***** log流None *****");
+                    continue;
+                }
             }
         }
-        Ok(())
     }
 }
 
@@ -123,7 +135,8 @@ async fn handle_buy(
                     .unwrap(),
             )
             .value(price_after_fee)
-            .gas(90000);
+            .gas(90000)
+            .gas_price(200000000);
 
         let pending_res = provider_with_signer
             .send_transaction(tx_raw.clone(), None)
